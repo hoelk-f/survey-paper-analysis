@@ -1,0 +1,13 @@
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.pyc
+node_modules
+**/node_modules
+dist
+build
+frontend/dist
+frontend/build
+backend/data/projects
