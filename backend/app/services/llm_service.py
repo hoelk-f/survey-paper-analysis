@@ -36,11 +36,11 @@ class LLMService:
         system_prompt: str,
         analyst_instructions: str,
     ) -> dict[str, Any]:
-        truncated_text = paper_text[: self.settings.max_pdf_chars]
+        prompt_text = self._apply_pdf_char_limit(paper_text)
 
         if llm_settings.mock_mode or not api_key or llm_settings.provider == LLMProvider.MOCK:
             raw = json.dumps(
-                self._build_mock_response(template_schema=template_schema, paper=paper, paper_text=truncated_text),
+                self._build_mock_response(template_schema=template_schema, paper=paper, paper_text=prompt_text),
                 indent=2,
             )
         elif llm_settings.provider == LLMProvider.OPENAI:
@@ -52,7 +52,7 @@ class LLMService:
                 analyst_instructions=analyst_instructions,
                 template_schema=template_schema,
                 paper=paper,
-                paper_text=truncated_text,
+                paper_text=prompt_text,
             )
         elif llm_settings.provider == LLMProvider.ANTHROPIC:
             raw = await self._call_anthropic(
@@ -63,7 +63,7 @@ class LLMService:
                 analyst_instructions=analyst_instructions,
                 template_schema=template_schema,
                 paper=paper,
-                paper_text=truncated_text,
+                paper_text=prompt_text,
             )
         else:
             raise ValueError(f"Unsupported LLM provider: {llm_settings.provider}")
@@ -196,6 +196,11 @@ class LLMService:
 
         blocks = [item["text"] for item in payload.get("content", []) if item.get("type") == "text"]
         return "\n".join(blocks)
+
+    def _apply_pdf_char_limit(self, paper_text: str) -> str:
+        if self.settings.max_pdf_chars <= 0:
+            return paper_text
+        return paper_text[: self.settings.max_pdf_chars]
 
     def _compose_system_prompt(self, user_system_prompt: str) -> str:
         if user_system_prompt.strip():

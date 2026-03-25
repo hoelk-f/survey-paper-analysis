@@ -15,10 +15,10 @@ class Settings(BaseSettings):
     api_prefix: str = "/api"
     data_dir: Path = BASE_DIR / "data"
     cors_origins: str = "http://localhost:5173"
-    max_pdf_chars: int = 60000
+    max_pdf_chars: int = 0
     default_provider: str = "openai"
     default_model: str = "gpt-4.1-mini"
-    request_timeout_seconds: int = 90
+    request_timeout_seconds: int = 300
     openai_base_url: str = "https://api.openai.com/v1"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_temperature: float = 0.1
