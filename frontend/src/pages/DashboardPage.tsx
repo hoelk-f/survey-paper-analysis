@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { CreateAnalysisModal } from "../components/CreateAnalysisModal";
 import { GettingStartedPanel } from "../components/GettingStartedPanel";
 import { ProjectList } from "../components/ProjectList";
@@ -20,6 +21,11 @@ function isActiveRun(run: RunSummary | RunDetail | null) {
 type VersionPaperDraft = PaperRecord & {
   file?: File | null;
 };
+
+type ConfirmDialogState =
+  | { kind: "delete-run"; run: RunSummary }
+  | { kind: "delete-project"; project: ProjectSummary }
+  | null;
 
 function cloneTemplateSchema(schema: TemplateSchema | null): TemplateSchema | null {
   return schema ? (JSON.parse(JSON.stringify(schema)) as TemplateSchema) : null;
@@ -58,6 +64,7 @@ export function DashboardPage() {
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [deletingPaperId, setDeletingPaperId] = useState<string | null>(null);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [processingRunId, setProcessingRunId] = useState<string | null>(null);
   const [isProcessingModalOpen, setIsProcessingModalOpen] = useState(false);
@@ -348,31 +355,41 @@ export function DashboardPage() {
   };
 
   const handleDeleteRun = async (run: RunSummary) => {
-    if (!selectedProjectId) {
-      return;
-    }
-    if (!window.confirm(`Delete version v${run.version_number}?`)) {
-      return;
-    }
-
-    setDeletingRunId(run.id);
-    setError(null);
-    try {
-      await api.deleteRun(selectedProjectId, run.id);
-      await reloadProjectContext(selectedProjectId, false);
-      await reloadProjects(selectedProjectId);
-    } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : "Failed to delete version.");
-    } finally {
-      setDeletingRunId(null);
-    }
+    setConfirmDialog({ kind: "delete-run", run });
   };
 
   const handleDeleteProject = async (projectSummary: ProjectSummary) => {
-    if (!window.confirm(`Delete project "${projectSummary.name}" and all its versions?`)) {
+    setConfirmDialog({ kind: "delete-project", project: projectSummary });
+  };
+
+  const handleConfirmDialog = async () => {
+    if (!confirmDialog) {
       return;
     }
 
+    if (confirmDialog.kind === "delete-run") {
+      const run = confirmDialog.run;
+      if (!selectedProjectId) {
+        setConfirmDialog(null);
+        return;
+      }
+
+      setDeletingRunId(run.id);
+      setError(null);
+      try {
+        await api.deleteRun(selectedProjectId, run.id);
+        await reloadProjectContext(selectedProjectId, false);
+        await reloadProjects(selectedProjectId);
+        setConfirmDialog(null);
+      } catch (caughtError) {
+        setError(caughtError instanceof Error ? caughtError.message : "Failed to delete version.");
+      } finally {
+        setDeletingRunId(null);
+      }
+      return;
+    }
+
+    const projectSummary = confirmDialog.project;
     setDeletingProjectId(projectSummary.id);
     setError(null);
     try {
@@ -384,12 +401,53 @@ export function DashboardPage() {
         setRuns([]);
       }
       await reloadProjects(projectSummary.id === selectedProjectId ? null : selectedProjectId);
+      setConfirmDialog(null);
     } catch (caughtError) {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to delete project.");
     } finally {
       setDeletingProjectId(null);
     }
   };
+
+  const closeConfirmDialog = () => {
+    if (deletingProjectId || deletingRunId) {
+      return;
+    }
+
+    setConfirmDialog(null);
+  };
+
+  const isConfirmDialogBusy =
+    (confirmDialog?.kind === "delete-run" && deletingRunId === confirmDialog.run.id) ||
+    (confirmDialog?.kind === "delete-project" && deletingProjectId === confirmDialog.project.id);
+
+  const confirmDialogTitle =
+    confirmDialog?.kind === "delete-run"
+      ? `Delete version v${confirmDialog.run.version_number}?`
+      : confirmDialog?.kind === "delete-project"
+        ? "Delete project?"
+        : "";
+
+  const confirmDialogDescription =
+    confirmDialog?.kind === "delete-run"
+      ? "This removes the selected version and its generated outputs."
+      : confirmDialog?.kind === "delete-project"
+        ? `This removes "${confirmDialog.project.name}" and all versions inside it.`
+        : "";
+
+  const confirmDialogActionLabel =
+    confirmDialog?.kind === "delete-run"
+      ? "Delete Version"
+      : confirmDialog?.kind === "delete-project"
+        ? "Delete Project"
+        : "Confirm";
+
+  const confirmDialogCancelLabel =
+    confirmDialog?.kind === "delete-project"
+      ? "Keep Project"
+      : confirmDialog?.kind === "delete-run"
+        ? "Keep Version"
+        : "Cancel";
 
   const hasSelectedProject = !!selectedProjectId;
   return (
@@ -498,6 +556,19 @@ export function DashboardPage() {
         isOpen={isProcessingModalOpen}
         run={selectedRun?.id === processingRunId ? selectedRun : null}
         mode={processingMode}
+      />
+      <ConfirmModal
+        isOpen={!!confirmDialog}
+        title={confirmDialogTitle}
+        description={confirmDialogDescription}
+        confirmLabel={confirmDialogActionLabel}
+        cancelLabel={confirmDialogCancelLabel}
+        tone="danger"
+        isBusy={!!isConfirmDialogBusy}
+        onCancel={closeConfirmDialog}
+        onConfirm={() => {
+          void handleConfirmDialog();
+        }}
       />
     </main>
   );
