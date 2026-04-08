@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_temperature: float = 0.1
+    elsevier_sciencedirect_search_url: str = "https://api.elsevier.com/content/search/sciencedirect"
 
     def cors_origins_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]

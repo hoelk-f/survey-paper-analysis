@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { api } from "../api/client";
+import { AppLink } from "../components/AppLink";
+import { AppShell } from "../components/AppShell";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { CreateAnalysisModal } from "../components/CreateAnalysisModal";
 import { GettingStartedPanel } from "../components/GettingStartedPanel";
@@ -10,6 +12,7 @@ import { RunProcessingModal, type RunProcessingMode } from "../components/RunPro
 import { SurfaceCard } from "../components/SurfaceCard";
 import { VersionList } from "../components/VersionList";
 import { WorkspacePanel } from "../components/WorkspacePanel";
+import { routes } from "../navigation";
 import type { PaperRecord, ProjectDetail, ProjectSummary, RunCreatePayload, RunDetail, RunSummary, TemplateSchema } from "../types";
 
 const PROJECT_STORAGE_KEY = "survey-paper-analysis:selected-project-id";
@@ -451,25 +454,29 @@ export function DashboardPage() {
 
   const hasSelectedProject = !!selectedProjectId;
   return (
-    <main className="relative min-h-screen overflow-hidden px-4 py-6 pb-28 text-mist sm:px-6 lg:px-8">
-      <div className="pointer-events-none absolute inset-0 -z-10 overflow-hidden">
-        <div className="absolute left-1/2 top-[28%] h-[1100px] w-[1100px] -translate-x-1/2 rounded-full border border-fuchsia-300/15 bg-[radial-gradient(circle_at_50%_72%,rgba(255,123,224,0.45),rgba(130,94,255,0.2)_38%,rgba(45,58,116,0.06)_60%,transparent_72%)]" />
-        <div className="absolute bottom-[-12%] left-1/2 h-[620px] w-[1400px] -translate-x-1/2 rounded-full bg-[radial-gradient(circle,rgba(255,78,222,0.3),transparent_60%)] blur-3xl" />
-      </div>
-
-      <div className="relative z-10 mx-auto w-[90vw]">
+    <AppShell>
+      <div>
         <header className="mb-10 flex flex-col gap-5 py-10 xl:flex-row xl:items-start xl:justify-between">
-          <div className="flex flex-col gap-4 pt-2 xl:flex-row xl:items-center xl:gap-5">
-            <h1 className="font-display text-5xl font-bold tracking-[-0.04em] text-white sm:text-7xl">
-              SPA - Survey Paper Analysis
-            </h1>
-            <button
-              type="button"
-              onClick={() => setIsCreateModalOpen(true)}
-              className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-accent/90"
+          <div className="flex flex-col gap-4 pt-2">
+            <AppLink
+              to={routes.home}
+              className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/5 px-4 py-2 text-sm font-medium text-slate-200 transition hover:border-white/20 hover:bg-white/10"
             >
-              Create New Project
-            </button>
+              <span aria-hidden="true">&lt;-</span>
+              <span>Back to Workflow Selection</span>
+            </AppLink>
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:gap-5">
+              <h1 className="font-display text-5xl font-bold tracking-[-0.04em] text-white sm:text-7xl">
+                Full-Text Screening
+              </h1>
+              <button
+                type="button"
+                onClick={() => setIsCreateModalOpen(true)}
+                className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-accent/90"
+              >
+                Create New Project
+              </button>
+            </div>
           </div>
           <div className="grid w-full gap-5 xl:max-w-[1120px] xl:grid-cols-2 xl:self-start">
             <ProjectList
@@ -542,10 +549,6 @@ export function DashboardPage() {
         )}
       </div>
 
-      <footer className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/75 py-4 text-center text-sm text-slate-500 backdrop-blur-xl">
-        &copy; TMDT
-      </footer>
-
       <CreateAnalysisModal
         isOpen={isCreateModalOpen}
         isBusy={isProjectBusy}
@@ -570,6 +573,6 @@ export function DashboardPage() {
           void handleConfirmDialog();
         }}
       />
-    </main>
+    </AppShell>
   );
 }

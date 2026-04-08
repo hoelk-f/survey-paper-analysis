@@ -1,4 +1,11 @@
-import type { ProjectDetail, ProjectSummary, RunCreatePayload, RunDetail, RunSummary, TemplateSchema } from "../types";
+import type {
+  ProjectDetail,
+  ProjectSummary,
+  RunCreatePayload,
+  RunDetail,
+  RunSummary,
+  TemplateSchema,
+} from "../types";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") || "/api";
 
