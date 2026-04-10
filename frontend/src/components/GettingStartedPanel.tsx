@@ -4,7 +4,7 @@ const steps = [
   { index: "01", title: "Name", detail: "Create the analysis." },
   { index: "02", title: "Template", detail: "Upload the Excel sheet." },
   { index: "03", title: "PDFs", detail: "Add the survey papers." },
-  { index: "04", title: "LLM", detail: "Choose key and model." },
+  { index: "04", title: "LLM", detail: "Choose provider, key and model." },
   { index: "05", title: "Review", detail: "Confirm and start the first version." },
 ];
 

@@ -1,4 +1,4 @@
-export type Provider = "openai" | "anthropic" | "mock";
+export type Provider = "openai" | "ki4buw" | "anthropic" | "mock";
 export type RunStatus = "pending" | "running" | "completed" | "completed_with_errors" | "failed";
 export type PaperStatus = "pending" | "running" | "completed" | "failed";
 

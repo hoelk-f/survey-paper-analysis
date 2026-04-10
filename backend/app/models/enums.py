@@ -3,6 +3,7 @@ from enum import Enum
 
 class LLMProvider(str, Enum):
     OPENAI = "openai"
+    KI4BUW = "ki4buw"
     ANTHROPIC = "anthropic"
     MOCK = "mock"
 

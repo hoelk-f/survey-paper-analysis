@@ -1,9 +1,19 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "../api/client";
-import { DEFAULT_ANALYST_INSTRUCTIONS, DEFAULT_MODEL_FALLBACK, DEFAULT_SYSTEM_PROMPT } from "../config/runDefaults";
-import { OPENAI_API_KEY_STORAGE_KEY } from "../config/storage";
-import type { RunCreatePayload, TemplateSchema } from "../types";
+import {
+  AVAILABLE_LLM_PROVIDERS,
+  DEFAULT_ANALYST_INSTRUCTIONS,
+  DEFAULT_PROVIDER,
+  DEFAULT_SYSTEM_PROMPT,
+  getDefaultModelForProvider,
+  getModelOptionsForProvider,
+  getProviderApiKeyLabel,
+  getProviderApiKeyPlaceholder,
+  getProviderLabel,
+} from "../config/runDefaults";
+import { getApiKeyStorageKey } from "../config/storage";
+import type { Provider, RunCreatePayload, TemplateSchema } from "../types";
 import { SurfaceCard } from "./SurfaceCard";
 import { TemplateGuidanceEditor } from "./TemplateGuidanceEditor";
 import { TemplatePreview } from "./TemplatePreview";
@@ -22,6 +32,8 @@ interface CreateAnalysisModalProps {
   onClose: () => void;
   onCreate: (input: CreateAnalysisInput) => Promise<void>;
 }
+
+const BROWSER_KEY_PROVIDERS = ["openai", "ki4buw"] as const;
 
 function createStepLabel(step: number) {
   if (step === 1) {
@@ -44,9 +56,10 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [paperFiles, setPaperFiles] = useState<File[]>([]);
   const [wizardStep, setWizardStep] = useState(1);
-  const [apiKey, setApiKey] = useState("");
-  const [availableModels, setAvailableModels] = useState<string[]>([DEFAULT_MODEL_FALLBACK]);
-  const [selectedModel, setSelectedModel] = useState(DEFAULT_MODEL_FALLBACK);
+  const [provider, setProvider] = useState<Provider>(DEFAULT_PROVIDER);
+  const [apiKeys, setApiKeys] = useState<Partial<Record<Provider, string>>>({});
+  const [availableModels, setAvailableModels] = useState<string[]>(getModelOptionsForProvider(DEFAULT_PROVIDER));
+  const [selectedModel, setSelectedModel] = useState(getDefaultModelForProvider(DEFAULT_PROVIDER));
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsError, setModelsError] = useState<string | null>(null);
   const [temperature, setTemperature] = useState(0.1);
@@ -57,6 +70,7 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
   const [templatePreviewLoading, setTemplatePreviewLoading] = useState(false);
   const [templatePreviewError, setTemplatePreviewError] = useState<string | null>(null);
   const [reviewConfirmed, setReviewConfirmed] = useState(false);
+  const apiKey = apiKeys[provider] ?? "";
   const reviewGuidanceSheets =
     templateSchemaDraft?.sheets
       .map((sheet) => ({
@@ -88,8 +102,9 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
     setTemplateFile(null);
     setPaperFiles([]);
     setWizardStep(1);
-    setAvailableModels([DEFAULT_MODEL_FALLBACK]);
-    setSelectedModel(DEFAULT_MODEL_FALLBACK);
+    setProvider(DEFAULT_PROVIDER);
+    setAvailableModels(getModelOptionsForProvider(DEFAULT_PROVIDER));
+    setSelectedModel(getDefaultModelForProvider(DEFAULT_PROVIDER));
     setModelsError(null);
     setTemperature(0.1);
     setSystemPrompt(DEFAULT_SYSTEM_PROMPT);
@@ -108,10 +123,18 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
   }, [isOpen]);
 
   useEffect(() => {
-    const storedApiKey = localStorage.getItem(OPENAI_API_KEY_STORAGE_KEY);
-    if (storedApiKey) {
-      setApiKey(storedApiKey);
+    const nextApiKeys: Partial<Record<Provider, string>> = {};
+    for (const targetProvider of BROWSER_KEY_PROVIDERS) {
+      const storageKey = getApiKeyStorageKey(targetProvider);
+      if (!storageKey) {
+        continue;
+      }
+      const storedApiKey = localStorage.getItem(storageKey);
+      if (storedApiKey) {
+        nextApiKeys[targetProvider] = storedApiKey;
+      }
     }
+    setApiKeys(nextApiKeys);
   }, []);
 
   useEffect(() => {
@@ -126,6 +149,7 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
     name,
     templateFile,
     paperFiles,
+    provider,
     apiKey,
     selectedModel,
     temperature,
@@ -183,33 +207,26 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
       return;
     }
 
-    const nextApiKey = apiKey.trim();
-    if (!nextApiKey) {
-      setAvailableModels([DEFAULT_MODEL_FALLBACK]);
-      setSelectedModel(DEFAULT_MODEL_FALLBACK);
-      setModelsError(null);
-      setModelsLoading(false);
-      return;
-    }
-
+    const fallbackModel = getDefaultModelForProvider(provider);
     let isCancelled = false;
     setModelsLoading(true);
     setModelsError(null);
 
     void (async () => {
       try {
-        const response = await api.listOpenAiModels(nextApiKey);
+        const response = await api.listModels(provider, apiKey.trim() || undefined);
         if (isCancelled) {
           return;
         }
-        setAvailableModels(response.models);
-        setSelectedModel((current) => (response.models.includes(current) ? current : response.models[0] ?? DEFAULT_MODEL_FALLBACK));
+        const nextModels = response.models.length > 0 ? response.models : getModelOptionsForProvider(provider);
+        setAvailableModels(nextModels);
+        setSelectedModel((current) => (nextModels.includes(current) ? current : nextModels[0] ?? fallbackModel));
       } catch (caughtError) {
         if (isCancelled) {
           return;
         }
-        setAvailableModels([DEFAULT_MODEL_FALLBACK]);
-        setSelectedModel(DEFAULT_MODEL_FALLBACK);
+        setAvailableModels(getModelOptionsForProvider(provider));
+        setSelectedModel(fallbackModel);
         setModelsError(caughtError instanceof Error ? caughtError.message : "Models could not be loaded.");
       } finally {
         if (!isCancelled) {
@@ -221,17 +238,22 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
     return () => {
       isCancelled = true;
     };
-  }, [apiKey, isOpen]);
+  }, [apiKey, isOpen, provider]);
 
   useEffect(() => {
-    const nextApiKey = apiKey.trim();
-    if (nextApiKey) {
-      localStorage.setItem(OPENAI_API_KEY_STORAGE_KEY, nextApiKey);
-      return;
+    for (const targetProvider of BROWSER_KEY_PROVIDERS) {
+      const storageKey = getApiKeyStorageKey(targetProvider);
+      if (!storageKey) {
+        continue;
+      }
+      const nextApiKey = apiKeys[targetProvider]?.trim();
+      if (nextApiKey) {
+        localStorage.setItem(storageKey, nextApiKey);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
     }
-
-    localStorage.removeItem(OPENAI_API_KEY_STORAGE_KEY);
-  }, [apiKey]);
+  }, [apiKeys]);
 
   const closeModal = () => {
     if (isBusy) {
@@ -253,7 +275,7 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
       papers: paperFiles,
       templateSchema: templateSchemaDraft,
       initialRun: {
-        provider: "openai",
+        provider,
         model: selectedModel,
         api_key: apiKey.trim() || undefined,
         temperature,
@@ -262,6 +284,14 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
         analyst_instructions: analystInstructions.trim(),
       },
     });
+  };
+
+  const handleProviderChange = (nextProvider: Provider) => {
+    const fallbackModel = getDefaultModelForProvider(nextProvider);
+    setProvider(nextProvider);
+    setAvailableModels(getModelOptionsForProvider(nextProvider));
+    setSelectedModel(fallbackModel);
+    setModelsError(null);
   };
 
   if (!isOpen) {
@@ -378,15 +408,35 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
 
             {wizardStep === 4 ? (
               <div className="space-y-4">
-                <div className="grid gap-4 md:grid-cols-[1fr_1fr_180px]">
+                <div className="grid gap-4 md:grid-cols-[1fr_1fr_1fr_180px]">
                   <label className="block">
-                    <span className="mb-2 block text-sm text-slate-300">OpenAI key</span>
+                    <span className="mb-2 block text-sm text-slate-300">Provider</span>
+                    <select
+                      className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
+                      value={provider}
+                      onChange={(event) => handleProviderChange(event.target.value as Provider)}
+                    >
+                      {AVAILABLE_LLM_PROVIDERS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+
+                  <label className="block">
+                    <span className="mb-2 block text-sm text-slate-300">{getProviderApiKeyLabel(provider)}</span>
                     <input
                       className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
                       type="password"
                       value={apiKey}
-                      placeholder="sk-..."
-                      onChange={(event) => setApiKey(event.target.value)}
+                      placeholder={getProviderApiKeyPlaceholder(provider)}
+                      onChange={(event) =>
+                        setApiKeys((current) => ({
+                          ...current,
+                          [provider]: event.target.value,
+                        }))
+                      }
                     />
                   </label>
 
@@ -422,6 +472,9 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
 
                 {modelsLoading ? <div className="text-sm text-slate-400">Loading models...</div> : null}
                 {modelsError ? <div className="text-sm text-amber-200">{modelsError}</div> : null}
+                {provider === "ki4buw" ? (
+                  <div className="text-sm text-slate-400">Server: https://llm.ki4buw.de/v1</div>
+                ) : null}
 
                 <label className="block">
                   <span className="mb-2 block text-sm text-slate-300">System</span>
@@ -446,7 +499,7 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
             {wizardStep === 5 ? (
               <div className="space-y-4">
                 <div className="rounded-3xl border border-white/10 bg-panelAlt/60 p-5">
-                  <div className="grid gap-4 md:grid-cols-5">
+                  <div className="grid gap-4 md:grid-cols-6">
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Project</div>
                       <div className="mt-2 text-sm text-white">{name.trim() || "Untitled"}</div>
@@ -458,6 +511,10 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">PDFs</div>
                       <div className="mt-2 text-sm text-white">{paperFiles.length}</div>
+                    </div>
+                    <div>
+                      <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Provider</div>
+                      <div className="mt-2 text-sm text-white">{getProviderLabel(provider)}</div>
                     </div>
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Model</div>

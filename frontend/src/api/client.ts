@@ -1,4 +1,5 @@
 import type {
+  Provider,
   ProjectDetail,
   ProjectSummary,
   RunCreatePayload,
@@ -156,13 +157,13 @@ export const api = {
     });
   },
 
-  listOpenAiModels(apiKey: string): Promise<{ models: string[] }> {
-    return request<{ models: string[] }>("/openai/models", {
+  listModels(provider: Provider, apiKey?: string): Promise<{ models: string[] }> {
+    return request<{ models: string[] }>("/llm/models", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ api_key: apiKey }),
+      body: JSON.stringify({ provider, api_key: apiKey }),
     });
   },
 };

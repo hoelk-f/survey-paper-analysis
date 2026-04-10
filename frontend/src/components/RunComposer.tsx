@@ -1,9 +1,19 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api/client";
-import { DEFAULT_ANALYST_INSTRUCTIONS, DEFAULT_MODEL_FALLBACK, DEFAULT_SYSTEM_PROMPT } from "../config/runDefaults";
-import { OPENAI_API_KEY_STORAGE_KEY } from "../config/storage";
-import type { ProjectDetail, RunCreatePayload, RunDetail } from "../types";
+import {
+  AVAILABLE_LLM_PROVIDERS,
+  DEFAULT_ANALYST_INSTRUCTIONS,
+  DEFAULT_PROVIDER,
+  DEFAULT_SYSTEM_PROMPT,
+  getDefaultModelForProvider,
+  getModelOptionsForProvider,
+  getProviderApiKeyLabel,
+  getProviderApiKeyPlaceholder,
+  isSelectableProvider,
+} from "../config/runDefaults";
+import { getApiKeyStorageKey } from "../config/storage";
+import type { ProjectDetail, Provider, RunCreatePayload, RunDetail } from "../types";
 import { SurfaceCard } from "./SurfaceCard";
 
 interface RunComposerProps {
@@ -14,49 +24,58 @@ interface RunComposerProps {
   embedded?: boolean;
 }
 
+const BROWSER_KEY_PROVIDERS = ["openai", "ki4buw"] as const;
+
 export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embedded = false }: RunComposerProps) {
-  const [model, setModel] = useState(DEFAULT_MODEL_FALLBACK);
-  const [apiKey, setApiKey] = useState("");
-  const [availableModels, setAvailableModels] = useState<string[]>([DEFAULT_MODEL_FALLBACK]);
+  const [provider, setProvider] = useState<Provider>(DEFAULT_PROVIDER);
+  const [model, setModel] = useState(getDefaultModelForProvider(DEFAULT_PROVIDER));
+  const [apiKeys, setApiKeys] = useState<Partial<Record<Provider, string>>>({});
+  const [availableModels, setAvailableModels] = useState<string[]>(getModelOptionsForProvider(DEFAULT_PROVIDER));
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsError, setModelsError] = useState<string | null>(null);
   const [temperature, setTemperature] = useState(0.1);
   const [label, setLabel] = useState("");
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [analystInstructions, setAnalystInstructions] = useState(DEFAULT_ANALYST_INSTRUCTIONS);
+  const apiKey = apiKeys[provider] ?? "";
 
   useEffect(() => {
-    const storedApiKey = localStorage.getItem(OPENAI_API_KEY_STORAGE_KEY);
-    if (storedApiKey) {
-      setApiKey(storedApiKey);
+    const nextApiKeys: Partial<Record<Provider, string>> = {};
+    for (const targetProvider of BROWSER_KEY_PROVIDERS) {
+      const storageKey = getApiKeyStorageKey(targetProvider);
+      if (!storageKey) {
+        continue;
+      }
+      const storedApiKey = localStorage.getItem(storageKey);
+      if (storedApiKey) {
+        nextApiKeys[targetProvider] = storedApiKey;
+      }
     }
+    setApiKeys(nextApiKeys);
   }, []);
 
   useEffect(() => {
-    const nextApiKey = apiKey.trim();
-    if (!nextApiKey) {
-      setAvailableModels([DEFAULT_MODEL_FALLBACK]);
-      setModel((current) => current || DEFAULT_MODEL_FALLBACK);
-      setModelsLoading(false);
-      return;
-    }
-
+    const fallbackModel = getDefaultModelForProvider(provider);
     let isCancelled = false;
     setModelsLoading(true);
+    setModelsError(null);
 
     void (async () => {
       try {
-        const response = await api.listOpenAiModels(nextApiKey);
+        const response = await api.listModels(provider, apiKey.trim() || undefined);
         if (isCancelled) {
           return;
         }
-        setAvailableModels(response.models);
-        setModel((current) => (response.models.includes(current) ? current : response.models[0] ?? DEFAULT_MODEL_FALLBACK));
-      } catch {
+        const nextModels = response.models.length > 0 ? response.models : getModelOptionsForProvider(provider);
+        setAvailableModels(nextModels);
+        setModel((current) => (nextModels.includes(current) ? current : nextModels[0] ?? fallbackModel));
+      } catch (caughtError) {
         if (isCancelled) {
           return;
         }
-        setAvailableModels([DEFAULT_MODEL_FALLBACK]);
-        setModel(DEFAULT_MODEL_FALLBACK);
+        setAvailableModels(getModelOptionsForProvider(provider));
+        setModel(fallbackModel);
+        setModelsError(caughtError instanceof Error ? caughtError.message : "Models could not be loaded.");
       } finally {
         if (!isCancelled) {
           setModelsLoading(false);
@@ -67,21 +86,27 @@ export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embe
     return () => {
       isCancelled = true;
     };
-  }, [apiKey]);
+  }, [apiKey, provider]);
 
   useEffect(() => {
-    const nextApiKey = apiKey.trim();
-    if (nextApiKey) {
-      localStorage.setItem(OPENAI_API_KEY_STORAGE_KEY, nextApiKey);
-      return;
+    for (const targetProvider of BROWSER_KEY_PROVIDERS) {
+      const storageKey = getApiKeyStorageKey(targetProvider);
+      if (!storageKey) {
+        continue;
+      }
+      const nextApiKey = apiKeys[targetProvider]?.trim();
+      if (nextApiKey) {
+        localStorage.setItem(storageKey, nextApiKey);
+      } else {
+        localStorage.removeItem(storageKey);
+      }
     }
-
-    localStorage.removeItem(OPENAI_API_KEY_STORAGE_KEY);
-  }, [apiKey]);
+  }, [apiKeys]);
 
   useEffect(() => {
     if (!selectedRun) {
-      setModel(DEFAULT_MODEL_FALLBACK);
+      setProvider(DEFAULT_PROVIDER);
+      setModel(getDefaultModelForProvider(DEFAULT_PROVIDER));
       setTemperature(0.1);
       setLabel("");
       setSystemPrompt(DEFAULT_SYSTEM_PROMPT);
@@ -89,16 +114,17 @@ export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embe
       return;
     }
 
-    setModel(
-      selectedRun.llm_settings.provider === "openai" && availableModels.includes(selectedRun.llm_settings.model)
-        ? selectedRun.llm_settings.model
-        : DEFAULT_MODEL_FALLBACK,
-    );
+    const nextProvider = isSelectableProvider(selectedRun.llm_settings.provider)
+      ? selectedRun.llm_settings.provider
+      : DEFAULT_PROVIDER;
+    const fallbackModel = getDefaultModelForProvider(nextProvider);
+    setProvider(nextProvider);
+    setModel(selectedRun.llm_settings.provider === nextProvider ? selectedRun.llm_settings.model : fallbackModel);
     setTemperature(selectedRun.llm_settings.temperature);
     setLabel(`Branch from v${selectedRun.version_number}`);
     setSystemPrompt(selectedRun.system_prompt || DEFAULT_SYSTEM_PROMPT);
     setAnalystInstructions(selectedRun.analyst_instructions || DEFAULT_ANALYST_INSTRUCTIONS);
-  }, [availableModels, selectedRun]);
+  }, [selectedRun]);
 
   const submit = async () => {
     if (!project) {
@@ -106,7 +132,7 @@ export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embe
     }
     await onSubmit({
       parent_run_id: selectedRun?.id ?? undefined,
-      provider: "openai",
+      provider,
       model,
       api_key: apiKey.trim() || undefined,
       temperature,
@@ -116,17 +142,45 @@ export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embe
     });
   };
 
+  const handleProviderChange = (nextProvider: Provider) => {
+    const fallbackModel = getDefaultModelForProvider(nextProvider);
+    setProvider(nextProvider);
+    setAvailableModels(getModelOptionsForProvider(nextProvider));
+    setModel(fallbackModel);
+    setModelsError(null);
+  };
+
   const content = project ? (
     <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2">
+      <div className="grid gap-4 md:grid-cols-3">
         <label className="block">
-          <span className="mb-2 block text-sm text-slate-300">OpenAI key</span>
+          <span className="mb-2 block text-sm text-slate-300">Provider</span>
+          <select
+            className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none focus:border-accent/60"
+            value={provider}
+            onChange={(event) => handleProviderChange(event.target.value as Provider)}
+          >
+            {AVAILABLE_LLM_PROVIDERS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="mb-2 block text-sm text-slate-300">{getProviderApiKeyLabel(provider)}</span>
           <input
             className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none focus:border-accent/60"
             type="password"
             value={apiKey}
-            placeholder="sk-..."
-            onChange={(event) => setApiKey(event.target.value)}
+            placeholder={getProviderApiKeyPlaceholder(provider)}
+            onChange={(event) =>
+              setApiKeys((current) => ({
+                ...current,
+                [provider]: event.target.value,
+              }))
+            }
           />
         </label>
 
@@ -146,6 +200,10 @@ export function RunComposer({ project, selectedRun, isSubmitting, onSubmit, embe
           </select>
         </label>
       </div>
+
+      {modelsLoading ? <div className="text-sm text-slate-400">Loading models...</div> : null}
+      {modelsError ? <div className="text-sm text-amber-200">{modelsError}</div> : null}
+      {provider === "ki4buw" ? <div className="text-sm text-slate-400">Server: https://llm.ki4buw.de/v1</div> : null}
 
       <div className="grid gap-4 md:grid-cols-[1fr_180px]">
         <label className="block">

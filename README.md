@@ -13,7 +13,7 @@ The app is organized around `Projects` and `Versions`:
 - Upload an Excel template and infer the target schema from its headers
 - Add column-specific guidance so the LLM knows what each column should contain
 - Upload multiple PDFs and process them one by one
-- Choose an OpenAI model in the UI and provide an API key there
+- Choose an LLM provider and model in the UI and provide the matching API key there
 - Fall back to deterministic mock mode when no API key is provided
 - Create refined follow-up versions without overwriting earlier ones
 - Reopen older versions and inspect their exact inputs
@@ -33,7 +33,7 @@ The app is organized around `Projects` and `Versions`:
 2. Upload the Excel template.
 3. Review the inferred headers and add optional column guidance.
 4. Upload the survey paper PDFs.
-5. Select the OpenAI model and run the first version.
+5. Select the LLM provider and model and run the first version.
 6. Refine the project by creating additional versions with different PDFs, template snapshots, prompts, or settings.
 7. Export the generated workbook from the selected version.
 
@@ -91,7 +91,7 @@ docker-compose.yml
 
 ## Notes
 
-- The UI currently exposes OpenAI model selection.
+- The UI currently supports OpenAI and a KI4BUW-hosted LLM server (`https://llm.ki4buw.de/v1`).
 - If no API key is entered, the backend runs in mock mode.
 - Extracted results are a first pass and must be reviewed manually before use.
 

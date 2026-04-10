@@ -1,4 +1,5 @@
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,15 @@ class LLMService:
         analyst_instructions: str,
     ) -> dict[str, Any]:
         prompt_text = self._apply_pdf_char_limit(paper_text)
+        if llm_settings.provider == LLMProvider.KI4BUW:
+            prompt_text = self._fit_paper_text_to_input_budget(
+                paper_text=prompt_text,
+                system_prompt=system_prompt,
+                analyst_instructions=analyst_instructions,
+                template_schema=template_schema,
+                paper=paper,
+                max_input_tokens=self.settings.ki4buw_max_input_tokens,
+            )
 
         if llm_settings.mock_mode or not api_key or llm_settings.provider == LLMProvider.MOCK:
             raw = json.dumps(
@@ -44,8 +54,9 @@ class LLMService:
                 indent=2,
             )
         elif llm_settings.provider == LLMProvider.OPENAI:
-            raw = await self._call_openai(
+            raw = await self._call_openai_compatible(
                 api_key=api_key,
+                base_url=self.settings.openai_base_url,
                 model=llm_settings.model,
                 temperature=llm_settings.temperature,
                 system_prompt=system_prompt,
@@ -53,6 +64,22 @@ class LLMService:
                 template_schema=template_schema,
                 paper=paper,
                 paper_text=prompt_text,
+                enforce_json_response=True,
+                max_completion_tokens=None,
+            )
+        elif llm_settings.provider == LLMProvider.KI4BUW:
+            raw = await self._call_openai_compatible(
+                api_key=api_key,
+                base_url=self.settings.ki4buw_base_url,
+                model=llm_settings.model,
+                temperature=llm_settings.temperature,
+                system_prompt=system_prompt,
+                analyst_instructions=analyst_instructions,
+                template_schema=template_schema,
+                paper=paper,
+                paper_text=prompt_text,
+                enforce_json_response=False,
+                max_completion_tokens=self.settings.ki4buw_max_completion_tokens,
             )
         elif llm_settings.provider == LLMProvider.ANTHROPIC:
             raw = await self._call_anthropic(
@@ -78,8 +105,41 @@ class LLMService:
             "confidence": confidence,
         }
 
-    async def list_openai_models(self, api_key: str) -> list[str]:
-        url = f"{self.settings.openai_base_url.rstrip('/')}/models"
+    async def list_models(self, provider: LLMProvider, api_key: str | None = None) -> list[str]:
+        if provider == LLMProvider.OPENAI:
+            if not api_key:
+                return [self.settings.default_model]
+            return await self._list_compatible_models(
+                api_key=api_key,
+                base_url=self.settings.openai_base_url,
+                fallback_models=[self.settings.default_model],
+                restrict_to_openai_chat_models=True,
+            )
+        if provider == LLMProvider.KI4BUW:
+            fallback_models = self.settings.ki4buw_models_list() or ["openai/qwen3"]
+            if not api_key:
+                return fallback_models
+            server_models = await self._list_compatible_models(
+                api_key=api_key,
+                base_url=self.settings.ki4buw_base_url,
+                fallback_models=[],
+                restrict_to_openai_chat_models=False,
+            )
+            allowed_models = [model for model in fallback_models if model in server_models]
+            if not allowed_models:
+                allowed_list = ", ".join(fallback_models)
+                raise ValueError(f"No allowed KI4BUW models are available for this API key. Allowed model(s): {allowed_list}")
+            return allowed_models
+        raise ValueError(f"Model listing is not supported for provider: {provider}")
+
+    async def _list_compatible_models(
+        self,
+        api_key: str,
+        base_url: str,
+        fallback_models: list[str],
+        restrict_to_openai_chat_models: bool,
+    ) -> list[str]:
+        url = f"{base_url.rstrip('/')}/models"
         async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
             response = await client.get(
                 url,
@@ -88,7 +148,7 @@ class LLMService:
                     "Content-Type": "application/json",
                 },
             )
-            response.raise_for_status()
+            self._raise_for_status_with_detail(response, "Model listing request")
             payload = response.json()
 
         models: list[str] = []
@@ -98,7 +158,7 @@ class LLMService:
                 continue
             if model_id.startswith("ft:"):
                 continue
-            if not model_id.startswith(("gpt-", "o1", "o3", "o4", "o5", "chatgpt-")):
+            if restrict_to_openai_chat_models and not model_id.startswith(("gpt-", "o1", "o3", "o4", "o5", "chatgpt-")):
                 continue
             if any(
                 blocked in model_id
@@ -108,11 +168,12 @@ class LLMService:
             models.append(model_id)
 
         unique_models = sorted(set(models))
-        return unique_models or ["gpt-4.1-mini"]
+        return unique_models or fallback_models
 
-    async def _call_openai(
+    async def _call_openai_compatible(
         self,
         api_key: str,
+        base_url: str,
         model: str,
         temperature: float,
         system_prompt: str,
@@ -120,12 +181,13 @@ class LLMService:
         template_schema: TemplateSchema,
         paper: PaperRecord,
         paper_text: str,
+        enforce_json_response: bool,
+        max_completion_tokens: int | None,
     ) -> str:
-        url = f"{self.settings.openai_base_url.rstrip('/')}/chat/completions"
+        url = f"{base_url.rstrip('/')}/chat/completions"
         body = {
             "model": model,
             "temperature": temperature,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": self._compose_system_prompt(system_prompt)},
                 {
@@ -139,6 +201,10 @@ class LLMService:
                 },
             ],
         }
+        if enforce_json_response:
+            body["response_format"] = {"type": "json_object"}
+        if max_completion_tokens is not None:
+            body["max_tokens"] = max_completion_tokens
         async with httpx.AsyncClient(timeout=self.settings.request_timeout_seconds) as client:
             response = await client.post(
                 url,
@@ -148,7 +214,7 @@ class LLMService:
                 },
                 json=body,
             )
-            response.raise_for_status()
+            self._raise_for_status_with_detail(response, "LLM request")
             payload = response.json()
         return payload["choices"][0]["message"]["content"]
 
@@ -191,16 +257,87 @@ class LLMService:
                 },
                 json=body,
             )
-            response.raise_for_status()
+            self._raise_for_status_with_detail(response, "Anthropic request")
             payload = response.json()
 
         blocks = [item["text"] for item in payload.get("content", []) if item.get("type") == "text"]
         return "\n".join(blocks)
 
+    def _raise_for_status_with_detail(self, response: httpx.Response, context: str) -> None:
+        if not response.is_error:
+            return
+
+        detail = self._extract_error_detail(response)
+        raise ValueError(f"{context} failed with status {response.status_code}: {detail}")
+
+    def _extract_error_detail(self, response: httpx.Response) -> str:
+        try:
+            payload = response.json()
+        except ValueError:
+            text = response.text.strip()
+            return text or response.reason_phrase
+
+        if isinstance(payload, dict):
+            error = payload.get("error")
+            if isinstance(error, dict):
+                message = error.get("message")
+                if isinstance(message, str) and message.strip():
+                    return message.strip()
+                return json.dumps(error, ensure_ascii=False)
+            detail = payload.get("detail")
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()
+
+        return json.dumps(payload, ensure_ascii=False)
+
     def _apply_pdf_char_limit(self, paper_text: str) -> str:
         if self.settings.max_pdf_chars <= 0:
             return paper_text
         return paper_text[: self.settings.max_pdf_chars]
+
+    def _fit_paper_text_to_input_budget(
+        self,
+        paper_text: str,
+        system_prompt: str,
+        analyst_instructions: str,
+        template_schema: TemplateSchema,
+        paper: PaperRecord,
+        max_input_tokens: int,
+    ) -> str:
+        if max_input_tokens <= 0 or not paper_text:
+            return paper_text
+
+        def estimate_total_tokens(candidate_text: str) -> int:
+            system_content = self._compose_system_prompt(system_prompt)
+            user_content = self._compose_user_prompt(
+                analyst_instructions=analyst_instructions,
+                template_schema=template_schema,
+                paper=paper,
+                paper_text=candidate_text,
+            )
+            # Chat payload overhead is approximate; keep a small buffer on top.
+            return self._estimate_tokens(system_content) + self._estimate_tokens(user_content) + 128
+
+        if estimate_total_tokens(paper_text) <= max_input_tokens:
+            return paper_text
+
+        low = 0
+        high = len(paper_text)
+        best = ""
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = paper_text[:mid]
+            if estimate_total_tokens(candidate) <= max_input_tokens:
+                best = candidate
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
+
+    def _estimate_tokens(self, text: str) -> int:
+        if not text:
+            return 0
+        return math.ceil(len(text) / 4)
 
     def _compose_system_prompt(self, user_system_prompt: str) -> str:
         if user_system_prompt.strip():

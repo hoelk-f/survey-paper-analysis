@@ -5,7 +5,7 @@ from uuid import uuid4
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import get_settings
-from app.models.enums import PaperResultStatus, RunStatus
+from app.models.enums import LLMProvider, PaperResultStatus, RunStatus
 from app.schemas.project import PaperRecord, ProjectRecord, TemplateSchema
 from app.schemas.run import LLMSettings, PaperExtractionResult, RunCreateRequest, RunDetail, RunRecord, RunSummary
 from app.services.llm_service import LLMService, get_llm_service
@@ -194,6 +194,9 @@ class RunService:
                 detail="At least one PDF is required to create a version.",
             )
 
+        selected_model = payload.model or self._get_default_model_for_provider(payload.provider)
+        self._validate_model_for_provider(payload.provider, selected_model)
+
         run = RunRecord(
             id=run_id,
             project_id=project_id,
@@ -205,7 +208,7 @@ class RunService:
             status=RunStatus.PENDING,
             llm_settings=LLMSettings(
                 provider=payload.provider,
-                model=payload.model or self.settings.default_model,
+                model=selected_model,
                 temperature=payload.temperature,
                 mock_mode=not bool(payload.api_key),
             ),
@@ -346,6 +349,23 @@ class RunService:
             total_papers=len(run.paper_results),
             workbook_download_url=workbook_download_url,
         )
+
+    def _get_default_model_for_provider(self, provider: LLMProvider) -> str:
+        if provider == LLMProvider.KI4BUW:
+            return self.settings.ki4buw_models_list()[0] if self.settings.ki4buw_models_list() else "openai/qwen3"
+        return self.settings.default_model
+
+    def _validate_model_for_provider(self, provider: LLMProvider, model: str) -> None:
+        if provider != LLMProvider.KI4BUW:
+            return
+
+        allowed_models = self.settings.ki4buw_models_list() or ["openai/qwen3"]
+        if model not in allowed_models:
+            allowed_list = ", ".join(allowed_models)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Model '{model}' is not allowed for KI4BUW. Allowed model(s): {allowed_list}.",
+            )
 
     def _get_template_source_path(
         self,

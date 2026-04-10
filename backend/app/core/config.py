@@ -20,12 +20,19 @@ class Settings(BaseSettings):
     default_model: str = "gpt-4.1-mini"
     request_timeout_seconds: int = 300
     openai_base_url: str = "https://api.openai.com/v1"
+    ki4buw_base_url: str = "https://llm.ki4buw.de/v1"
+    ki4buw_models: str = "openai/qwen3"
+    ki4buw_max_input_tokens: int = 9000
+    ki4buw_max_completion_tokens: int = 1024
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_temperature: float = 0.1
     elsevier_sciencedirect_search_url: str = "https://api.elsevier.com/content/search/sciencedirect"
 
     def cors_origins_list(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    def ki4buw_models_list(self) -> list[str]:
+        return [item.strip() for item in self.ki4buw_models.split(",") if item.strip()]
 
 
 @lru_cache(maxsize=1)
