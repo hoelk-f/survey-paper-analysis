@@ -1,13 +1,22 @@
 import type { RunDetail } from "../types";
 
-export type RunProcessingMode = "initial" | "refine";
+export type RunProcessingMode = "initial" | "refine" | "fix";
 
 function getHeadline(run: RunDetail | null, mode: RunProcessingMode) {
   if (!run) {
+    if (mode === "fix") {
+      return "Starting error fix";
+    }
     return mode === "initial" ? "Starting analysis" : "Starting new version";
   }
   if (run.status === "pending") {
+    if (mode === "fix") {
+      return "Preparing failed PDFs";
+    }
     return mode === "initial" ? "Preparing first version" : "Preparing refined version";
+  }
+  if (mode === "fix") {
+    return "Fixing failed PDFs";
   }
   return mode === "initial" ? "Processing survey papers" : "Refining survey papers";
 }
@@ -22,10 +31,16 @@ function getProgress(run: RunDetail | null) {
 }
 
 function getEyebrow(mode: RunProcessingMode) {
+  if (mode === "fix") {
+    return "Fix errors";
+  }
   return mode === "initial" ? "Initial run" : "Refine version";
 }
 
 function getDescription(mode: RunProcessingMode) {
+  if (mode === "fix") {
+    return "Only failed PDFs are analyzed again. The workbook is rebuilt when processing finishes.";
+  }
   return mode === "initial"
     ? "PDFs are analyzed one by one. The first version will open automatically when processing finishes."
     : "PDFs are analyzed one by one. The new version will open automatically when processing finishes.";
@@ -33,7 +48,13 @@ function getDescription(mode: RunProcessingMode) {
 
 function getProgressLabel(run: RunDetail | null, mode: RunProcessingMode) {
   if (!run) {
+    if (mode === "fix") {
+      return "Preparing...";
+    }
     return mode === "initial" ? "Preparing..." : "Creating...";
+  }
+  if (mode === "fix") {
+    return "Fix processing";
   }
   return mode === "initial" ? "Initial processing" : "Version processing";
 }
@@ -42,10 +63,14 @@ export function RunProcessingModal({
   isOpen,
   run,
   mode,
+  isPausing = false,
+  onPause,
 }: {
   isOpen: boolean;
   run: RunDetail | null;
   mode: RunProcessingMode;
+  isPausing?: boolean;
+  onPause?: () => void;
 }) {
   if (!isOpen) {
     return null;
@@ -79,6 +104,17 @@ export function RunProcessingModal({
               />
             </div>
           </div>
+
+          {onPause ? (
+            <button
+              type="button"
+              onClick={onPause}
+              disabled={isPausing || !run}
+              className="mt-6 rounded-full border border-white/10 px-5 py-3 text-sm font-semibold text-white transition hover:border-sky-300/50 hover:text-sky-200 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPausing ? "Saving..." : "Save Progress & Pause"}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

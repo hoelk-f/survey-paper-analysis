@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, s
 from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
-from app.schemas.run import RunCreateRequest, RunDetail, RunSummary
+from app.schemas.run import RunCreateRequest, RunDetail, RunResumeRequest, RunRetryFailedRequest, RunSummary
 from app.services.run_service import RunService, get_run_service
 
 router = APIRouter()
@@ -36,6 +36,36 @@ async def create_run(
 @router.get("/{run_id}", response_model=RunDetail)
 def get_run(project_id: str, run_id: str, run_service: RunService = Depends(get_run_service)) -> RunDetail:
     return run_service.get_run_detail(project_id, run_id)
+
+
+@router.post("/{run_id}/pause", response_model=RunDetail)
+async def pause_run(project_id: str, run_id: str, run_service: RunService = Depends(get_run_service)) -> RunDetail:
+    return await run_service.pause_run(project_id=project_id, run_id=run_id)
+
+
+@router.post("/{run_id}/resume", response_model=RunDetail)
+async def resume_run(
+    project_id: str,
+    run_id: str,
+    payload: RunResumeRequest,
+    run_service: RunService = Depends(get_run_service),
+) -> RunDetail:
+    return run_service.resume_run(project_id=project_id, run_id=run_id, api_key=payload.api_key)
+
+
+@router.post("/{run_id}/retry-failed", response_model=RunDetail)
+async def retry_failed_papers(
+    project_id: str,
+    run_id: str,
+    payload: RunRetryFailedRequest,
+    run_service: RunService = Depends(get_run_service),
+) -> RunDetail:
+    return run_service.retry_failed_papers(
+        project_id=project_id,
+        run_id=run_id,
+        api_key=payload.api_key,
+        schema_chunk_columns=payload.chunk_size,
+    )
 
 
 @router.delete("/{run_id}", status_code=status.HTTP_204_NO_CONTENT)

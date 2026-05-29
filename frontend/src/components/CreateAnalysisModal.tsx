@@ -20,6 +20,8 @@ import { TemplatePreview } from "./TemplatePreview";
 
 interface CreateAnalysisInput {
   name?: string;
+  description?: string;
+  researchQuestions?: string[];
   template: File;
   papers: File[];
   templateSchema?: TemplateSchema | null;
@@ -53,6 +55,8 @@ function createStepLabel(step: number) {
 
 export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: CreateAnalysisModalProps) {
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [researchQuestions, setResearchQuestions] = useState(["", "", ""]);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
   const [paperFiles, setPaperFiles] = useState<File[]>([]);
   const [wizardStep, setWizardStep] = useState(1);
@@ -78,6 +82,10 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
         columns: sheet.columns.filter((column) => column.description.trim()),
       }))
       .filter((sheet) => sheet.columns.length > 0) ?? [];
+  const trimmedResearchQuestions = researchQuestions.map((question) => question.trim());
+  const reviewResearchQuestions = trimmedResearchQuestions
+    .map((question, index) => ({ label: `RQ ${index + 1}`, question }))
+    .filter((item) => item.question);
 
   const isTemplateStepComplete = !!templateFile && !!templatePreview && !templatePreviewLoading && !templatePreviewError;
   const isLlmStepComplete = !!selectedModel && !!systemPrompt.trim() && !!analystInstructions.trim() && !modelsLoading;
@@ -99,6 +107,8 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
 
   const resetWizard = () => {
     setName("");
+    setDescription("");
+    setResearchQuestions(["", "", ""]);
     setTemplateFile(null);
     setPaperFiles([]);
     setWizardStep(1);
@@ -147,6 +157,8 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
     isOpen,
     wizardStep,
     name,
+    description,
+    researchQuestions,
     templateFile,
     paperFiles,
     provider,
@@ -271,6 +283,8 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
 
     await onCreate({
       name: name.trim() || undefined,
+      description: description.trim() || undefined,
+      researchQuestions: trimmedResearchQuestions,
       template: templateFile,
       papers: paperFiles,
       templateSchema: templateSchemaDraft,
@@ -300,7 +314,6 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8 backdrop-blur-md">
-      <div className="absolute inset-0" onClick={closeModal} />
       <div className="relative z-10 w-full max-w-6xl">
         <SurfaceCard
           title="Create New Project"
@@ -340,15 +353,47 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
             </div>
 
             {wizardStep === 1 ? (
-              <label className="block">
-                <span className="mb-2 block text-sm text-slate-300">Project</span>
-                <input
-                  className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
-                  placeholder="Survey Paper Analysis"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
-              </label>
+              <div className="space-y-4">
+                <label className="block">
+                  <span className="mb-2 block text-sm text-slate-300">Project</span>
+                  <input
+                    className="w-full rounded-2xl border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
+                    placeholder="Survey Paper Analysis"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                  />
+                </label>
+
+                <label className="block">
+                  <span className="mb-2 block text-sm text-slate-300">Description</span>
+                  <textarea
+                    className="min-h-24 w-full rounded-[1.75rem] border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
+                    placeholder="Short project context for the extraction."
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                  />
+                </label>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  {researchQuestions.map((question, index) => (
+                    <label key={index} className="block">
+                      <span className="mb-2 block text-sm text-slate-300">RQ {index + 1}</span>
+                      <textarea
+                        className="min-h-20 w-full rounded-[1.5rem] border border-white/10 bg-panelAlt/80 px-4 py-3 text-sm text-white outline-none transition focus:border-accent/60"
+                        placeholder={`Research question ${index + 1}`}
+                        value={question}
+                        onChange={(event) =>
+                          setResearchQuestions((current) =>
+                            current.map((currentQuestion, currentIndex) =>
+                              currentIndex === index ? event.target.value : currentQuestion,
+                            ),
+                          )
+                        }
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
             ) : null}
 
             {wizardStep === 2 ? (
@@ -523,6 +568,33 @@ export function CreateAnalysisModal({ isOpen, isBusy, onClose, onCreate }: Creat
                     <div>
                       <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Temperature</div>
                       <div className="mt-2 text-sm text-white">{temperature}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-white/10 bg-panelAlt/60 p-5">
+                  <div className="text-[11px] uppercase tracking-[0.22em] text-slate-500">Project Context</div>
+                  <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                      <div className="text-sm font-semibold text-white">Description</div>
+                      <p className="mt-2 whitespace-pre-wrap text-sm text-slate-300">
+                        {description.trim() || "-"}
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="text-sm font-semibold text-white">Research Questions</div>
+                      {reviewResearchQuestions.length > 0 ? (
+                        <div className="mt-2 space-y-2">
+                          {reviewResearchQuestions.map((item) => (
+                            <div key={item.label} className="text-sm text-slate-300">
+                              <span className="font-semibold text-white">{item.label}:</span> {item.question}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-sm text-slate-400">No research questions provided.</p>
+                      )}
                     </div>
                   </div>
                 </div>

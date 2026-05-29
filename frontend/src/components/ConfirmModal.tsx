@@ -32,14 +32,6 @@ export function ConfirmModal({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/80 px-4 py-8 backdrop-blur-md">
-      <div
-        className="absolute inset-0"
-        onClick={() => {
-          if (!isBusy) {
-            onCancel();
-          }
-        }}
-      />
       <div className="relative z-10 w-full max-w-md rounded-[2rem] border border-white/10 bg-panel/90 p-6 shadow-glow backdrop-blur-2xl">
         <div className="space-y-3">
           <div className="font-display text-2xl font-semibold text-white">{title}</div>

@@ -9,6 +9,9 @@
   background:
     linear-gradient(180deg, #0b0d17 0%, #111325 58%, #15132a 100%);
   font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  font-size: 80%;
+  scrollbar-color: rgba(236, 236, 255, 0.34) transparent;
+  scrollbar-width: thin;
 }
 
 html, body, #root {
@@ -25,9 +28,53 @@ body {
 
 * {
   box-sizing: border-box;
+  scrollbar-color: rgba(236, 236, 255, 0.34) transparent;
+  scrollbar-width: thin;
 }
 
 ::selection {
   background: rgba(255, 102, 214, 0.35);
   color: #f8fbff;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  min-height: 44px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      180deg,
+      rgba(236, 236, 255, 0.38),
+      rgba(143, 124, 255, 0.42)
+    )
+    content-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(248, 251, 255, 0.52),
+      rgba(255, 102, 214, 0.5)
+    )
+    content-box;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+@media (forced-colors: active) {
+  * {
+    scrollbar-color: auto;
+  }
 }

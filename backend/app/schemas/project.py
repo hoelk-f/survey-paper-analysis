@@ -33,6 +33,8 @@ class PaperRecord(BaseModel):
 class ProjectRecord(BaseModel):
     id: str
     name: str
+    description: str = ""
+    research_questions: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     template_filename: str
@@ -44,6 +46,8 @@ class ProjectRecord(BaseModel):
 class ProjectSummary(BaseModel):
     id: str
     name: str
+    description: str = ""
+    research_questions: list[str] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
     template_filename: str
@@ -54,3 +58,8 @@ class ProjectSummary(BaseModel):
 class ProjectDetail(ProjectSummary):
     template_schema: TemplateSchema
     papers: list[PaperRecord] = Field(default_factory=list)
+
+
+class ProjectContextUpdate(BaseModel):
+    description: str = ""
+    research_questions: list[str] = Field(default_factory=list)

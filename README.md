@@ -64,7 +64,7 @@ docker compose up -d --build
 
 After startup:
 - Frontend: `http://localhost:8080`
-- Backend health: `http://localhost:8000/api/health`
+- Backend health: `http://localhost:8001/api/health`
 - Backend via frontend proxy: `http://localhost:8080/api/health`
 
 ## Persistence

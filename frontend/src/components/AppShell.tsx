@@ -15,7 +15,7 @@ export function AppShell({ containerClassName = "", children }: AppShellProps) {
       <div className={`relative z-10 mx-auto w-[90vw] ${containerClassName}`.trim()}>{children}</div>
 
       <footer className="fixed bottom-0 left-0 right-0 z-30 border-t border-white/10 bg-slate-950/75 py-4 text-center text-sm text-slate-500 backdrop-blur-xl">
-        &copy; TMDT
+        &copy; Florian H&ouml;lken, TMDT
       </footer>
     </main>
   );

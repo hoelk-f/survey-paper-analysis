@@ -1,5 +1,5 @@
 export type Provider = "openai" | "ki4buw" | "anthropic" | "mock";
-export type RunStatus = "pending" | "running" | "completed" | "completed_with_errors" | "failed";
+export type RunStatus = "pending" | "running" | "paused" | "completed" | "completed_with_errors" | "failed";
 export type PaperStatus = "pending" | "running" | "completed" | "failed";
 
 export interface ColumnSchema {
@@ -32,6 +32,8 @@ export interface PaperRecord {
 export interface ProjectSummary {
   id: string;
   name: string;
+  description: string;
+  research_questions: string[];
   created_at: string;
   updated_at: string;
   template_filename: string;

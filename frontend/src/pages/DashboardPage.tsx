@@ -8,10 +8,12 @@ import { CreateAnalysisModal } from "../components/CreateAnalysisModal";
 import { GettingStartedPanel } from "../components/GettingStartedPanel";
 import { ProjectList } from "../components/ProjectList";
 import { RunComposer } from "../components/RunComposer";
+import { RunInspector } from "../components/RunInspector";
 import { RunProcessingModal, type RunProcessingMode } from "../components/RunProcessingModal";
 import { SurfaceCard } from "../components/SurfaceCard";
 import { VersionList } from "../components/VersionList";
 import { WorkspacePanel } from "../components/WorkspacePanel";
+import { getApiKeyStorageKey } from "../config/storage";
 import { routes } from "../navigation";
 import type { PaperRecord, ProjectDetail, ProjectSummary, RunCreatePayload, RunDetail, RunSummary, TemplateSchema } from "../types";
 
@@ -64,6 +66,9 @@ export function DashboardPage() {
   const [selectedRun, setSelectedRun] = useState<RunDetail | null>(null);
   const [isProjectBusy, setIsProjectBusy] = useState(false);
   const [isRunBusy, setIsRunBusy] = useState(false);
+  const [pausingRunId, setPausingRunId] = useState<string | null>(null);
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
+  const [fixingRunId, setFixingRunId] = useState<string | null>(null);
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [deletingRunId, setDeletingRunId] = useState<string | null>(null);
   const [deletingPaperId, setDeletingPaperId] = useState<string | null>(null);
@@ -72,6 +77,7 @@ export function DashboardPage() {
   const [processingRunId, setProcessingRunId] = useState<string | null>(null);
   const [isProcessingModalOpen, setIsProcessingModalOpen] = useState(false);
   const [processingMode, setProcessingMode] = useState<RunProcessingMode>("initial");
+  const [retryChunkSize, setRetryChunkSize] = useState("14");
   const [templateSchemaDraft, setTemplateSchemaDraft] = useState<TemplateSchema | null>(null);
   const [appliedTemplateSchema, setAppliedTemplateSchema] = useState<TemplateSchema | null>(null);
   const [versionTemplateFilename, setVersionTemplateFilename] = useState<string | null>(null);
@@ -244,6 +250,8 @@ export function DashboardPage() {
 
   const handleCreateProject = async (input: {
     name?: string;
+    description?: string;
+    researchQuestions?: string[];
     template: File;
     papers: File[];
     templateSchema?: TemplateSchema | null;
@@ -310,6 +318,28 @@ export function DashboardPage() {
     }
   };
 
+  const handleSaveProjectContext = async (input: { description: string; researchQuestions: string[] }) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    setIsProjectBusy(true);
+    setError(null);
+    try {
+      const updatedProject = await api.updateProjectContext(selectedProjectId, input);
+      setProject(updatedProject);
+      setProjects((current) =>
+        current.map((projectSummary) =>
+          projectSummary.id === updatedProject.id ? updatedProject : projectSummary,
+        ),
+      );
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to save project context.");
+    } finally {
+      setIsProjectBusy(false);
+    }
+  };
+
   const handleDeletePaper = async (paperId: string) => {
     setDeletingPaperId(paperId);
     setVersionPaperDrafts((current) => current.filter((paper) => paper.id !== paperId));
@@ -354,6 +384,91 @@ export function DashboardPage() {
       setError(caughtError instanceof Error ? caughtError.message : "Failed to create run.");
     } finally {
       setIsRunBusy(false);
+    }
+  };
+
+  const getStoredApiKey = (run: RunSummary | RunDetail) => {
+    const storageKey = getApiKeyStorageKey(run.llm_settings.provider);
+    return storageKey ? localStorage.getItem(storageKey)?.trim() || undefined : undefined;
+  };
+
+  const handlePauseRun = async () => {
+    if (!selectedProjectId || !processingRunId) {
+      return;
+    }
+
+    setPausingRunId(processingRunId);
+    setError(null);
+    try {
+      const paused = await api.pauseRun(selectedProjectId, processingRunId);
+      await reloadProjectContext(selectedProjectId, false);
+      await reloadProjects(selectedProjectId);
+      setSelectedRunId(paused.id);
+      setSelectedRun(paused);
+      setIsProcessingModalOpen(false);
+      setProcessingRunId(null);
+      setProcessingMode("initial");
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to pause run.");
+    } finally {
+      setPausingRunId(null);
+    }
+  };
+
+  const handleResumeRun = async (run: RunSummary) => {
+    if (!selectedProjectId) {
+      return;
+    }
+
+    setResumingRunId(run.id);
+    setError(null);
+    try {
+      const resumed = await api.resumeRun(selectedProjectId, run.id, {
+        apiKey: getStoredApiKey(run),
+      });
+      await reloadProjectContext(selectedProjectId, false);
+      await reloadProjects(selectedProjectId);
+      setSelectedRunId(resumed.id);
+      setSelectedRun(resumed);
+      setProcessingRunId(resumed.id);
+      setProcessingMode(resumed.parent_run_id ? "refine" : "initial");
+      setIsProcessingModalOpen(true);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to resume run.");
+    } finally {
+      setResumingRunId(null);
+    }
+  };
+
+  const handleRetryFailedPapers = async () => {
+    if (!selectedProjectId || !selectedRun) {
+      return;
+    }
+
+    const parsedChunkSize = Number.parseInt(retryChunkSize, 10);
+    if (!Number.isFinite(parsedChunkSize) || parsedChunkSize < 1 || parsedChunkSize > 100) {
+      setError("Chunk size must be a whole number between 1 and 100.");
+      return;
+    }
+
+    setFixingRunId(selectedRun.id);
+    setError(null);
+    try {
+      const retried = await api.retryFailedPapers(selectedProjectId, selectedRun.id, {
+        apiKey: getStoredApiKey(selectedRun),
+        chunkSize: parsedChunkSize,
+      });
+      await reloadProjectContext(selectedProjectId, false);
+      await reloadProjects(selectedProjectId);
+      setSelectedRunId(retried.id);
+      setSelectedRun(retried);
+      setProcessingRunId(retried.id);
+      setProcessingMode("fix");
+      setIsProcessingModalOpen(true);
+    } catch (caughtError) {
+      setError(caughtError instanceof Error ? caughtError.message : "Failed to retry failed PDFs.");
+    } finally {
+      setFixingRunId(null);
     }
   };
 
@@ -491,8 +606,10 @@ export function DashboardPage() {
               hasProject={hasSelectedProject}
               selectedRunId={selectedRunId}
               deletingRunId={deletingRunId}
+              resumingRunId={resumingRunId}
               onSelect={setSelectedRunId}
               onDelete={handleDeleteRun}
+              onResume={handleResumeRun}
             />
           </div>
         </header>
@@ -509,6 +626,13 @@ export function DashboardPage() {
           </div>
         ) : hasSelectedProject ? (
           <div className="space-y-6">
+            <RunInspector
+              run={selectedRun}
+              isRetryingFailed={!!selectedRun && fixingRunId === selectedRun.id}
+              retryChunkSize={retryChunkSize}
+              onRetryChunkSizeChange={setRetryChunkSize}
+              onRetryFailed={() => void handleRetryFailedPapers()}
+            />
             <SurfaceCard title="Refine Version">
               <div className="space-y-6">
                 {project ? (
@@ -525,6 +649,7 @@ export function DashboardPage() {
                       onAddPapers={handleAddPapers}
                       onDeletePaper={handleDeletePaper}
                       onReplaceTemplate={handleReplaceTemplate}
+                      onSaveProjectContext={handleSaveProjectContext}
                       onSaveTemplateGuidance={handleSaveTemplateGuidance}
                       onTemplateSchemaDraftChange={setTemplateSchemaDraft}
                     />
@@ -559,6 +684,8 @@ export function DashboardPage() {
         isOpen={isProcessingModalOpen}
         run={selectedRun?.id === processingRunId ? selectedRun : null}
         mode={processingMode}
+        isPausing={pausingRunId === processingRunId}
+        onPause={processingRunId ? () => void handlePauseRun() : undefined}
       />
       <ConfirmModal
         isOpen={!!confirmDialog}

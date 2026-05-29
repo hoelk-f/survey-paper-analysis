@@ -8,7 +8,7 @@ import httpx
 
 from app.core.config import get_settings
 from app.models.enums import LLMProvider
-from app.schemas.project import PaperRecord, TemplateSchema
+from app.schemas.project import PaperRecord, SheetSchema, TemplateSchema
 from app.schemas.run import LLMSettings
 from app.services.template_service import TemplateService, get_template_service
 
@@ -20,6 +20,12 @@ Use the Excel template schema exactly as given.
 If a value cannot be determined from the paper, return an empty string.
 Do not invent facts.
 """.strip()
+
+
+class LLMResponseParseError(ValueError):
+    def __init__(self, message: str, raw_text: str) -> None:
+        super().__init__(message)
+        self.raw_text = raw_text
 
 
 class LLMService:
@@ -36,25 +42,56 @@ class LLMService:
         paper_text: str,
         system_prompt: str,
         analyst_instructions: str,
+        schema_chunk_columns: int | None = None,
     ) -> dict[str, Any]:
-        prompt_text = self._apply_pdf_char_limit(paper_text)
-        if llm_settings.provider == LLMProvider.KI4BUW:
-            prompt_text = self._fit_paper_text_to_input_budget(
+        base_prompt_text = self._apply_pdf_char_limit(paper_text)
+        schema_chunks = self._split_template_schema(template_schema, schema_chunk_columns)
+        chunk_results: list[dict[str, Any]] = []
+
+        for chunk_schema in schema_chunks:
+            prompt_text = base_prompt_text
+            if llm_settings.provider == LLMProvider.KI4BUW:
+                prompt_text = self._fit_paper_text_to_input_budget(
+                    paper_text=prompt_text,
+                    system_prompt=system_prompt,
+                    analyst_instructions=analyst_instructions,
+                    template_schema=chunk_schema,
+                    paper=paper,
+                    max_input_tokens=self.settings.ki4buw_max_input_tokens,
+                )
+
+            raw = await self._generate_raw_response(
+                llm_settings=llm_settings,
+                api_key=api_key,
+                template_schema=chunk_schema,
+                paper=paper,
                 paper_text=prompt_text,
                 system_prompt=system_prompt,
                 analyst_instructions=analyst_instructions,
-                template_schema=template_schema,
-                paper=paper,
-                max_input_tokens=self.settings.ki4buw_max_input_tokens,
             )
+            chunk_results.append(self._parse_and_normalize_response(raw, chunk_schema))
 
+        if len(chunk_results) == 1:
+            return chunk_results[0]
+        return self._merge_chunk_results(template_schema, chunk_results)
+
+    async def _generate_raw_response(
+        self,
+        llm_settings: LLMSettings,
+        api_key: str | None,
+        template_schema: TemplateSchema,
+        paper: PaperRecord,
+        paper_text: str,
+        system_prompt: str,
+        analyst_instructions: str,
+    ) -> str:
         if llm_settings.mock_mode or not api_key or llm_settings.provider == LLMProvider.MOCK:
-            raw = json.dumps(
-                self._build_mock_response(template_schema=template_schema, paper=paper, paper_text=prompt_text),
+            return json.dumps(
+                self._build_mock_response(template_schema=template_schema, paper=paper, paper_text=paper_text),
                 indent=2,
             )
-        elif llm_settings.provider == LLMProvider.OPENAI:
-            raw = await self._call_openai_compatible(
+        if llm_settings.provider == LLMProvider.OPENAI:
+            return await self._call_openai_compatible(
                 api_key=api_key,
                 base_url=self.settings.openai_base_url,
                 model=llm_settings.model,
@@ -63,12 +100,12 @@ class LLMService:
                 analyst_instructions=analyst_instructions,
                 template_schema=template_schema,
                 paper=paper,
-                paper_text=prompt_text,
+                paper_text=paper_text,
                 enforce_json_response=True,
                 max_completion_tokens=None,
             )
-        elif llm_settings.provider == LLMProvider.KI4BUW:
-            raw = await self._call_openai_compatible(
+        if llm_settings.provider == LLMProvider.KI4BUW:
+            return await self._call_openai_compatible(
                 api_key=api_key,
                 base_url=self.settings.ki4buw_base_url,
                 model=llm_settings.model,
@@ -77,12 +114,12 @@ class LLMService:
                 analyst_instructions=analyst_instructions,
                 template_schema=template_schema,
                 paper=paper,
-                paper_text=prompt_text,
+                paper_text=paper_text,
                 enforce_json_response=False,
                 max_completion_tokens=self.settings.ki4buw_max_completion_tokens,
             )
-        elif llm_settings.provider == LLMProvider.ANTHROPIC:
-            raw = await self._call_anthropic(
+        if llm_settings.provider == LLMProvider.ANTHROPIC:
+            return await self._call_anthropic(
                 api_key=api_key,
                 model=llm_settings.model,
                 temperature=llm_settings.temperature,
@@ -90,12 +127,18 @@ class LLMService:
                 analyst_instructions=analyst_instructions,
                 template_schema=template_schema,
                 paper=paper,
-                paper_text=prompt_text,
+                paper_text=paper_text,
             )
-        else:
-            raise ValueError(f"Unsupported LLM provider: {llm_settings.provider}")
+        raise ValueError(f"Unsupported LLM provider: {llm_settings.provider}")
 
-        parsed = self._parse_response(raw)
+    def _parse_and_normalize_response(self, raw: str, template_schema: TemplateSchema) -> dict[str, Any]:
+        try:
+            parsed = self._parse_response(raw)
+        except (json.JSONDecodeError, ValueError) as exc:
+            raise LLMResponseParseError(
+                f"LLM response was not valid JSON. The response may have been truncated by the provider. Parser error: {exc}",
+                raw,
+            ) from exc
         normalized_output, warnings, notes, confidence = self._normalize_output(parsed, template_schema)
         return {
             "raw_text": raw,
@@ -104,6 +147,93 @@ class LLMService:
             "notes": notes,
             "confidence": confidence,
         }
+
+    def _merge_chunk_results(
+        self,
+        template_schema: TemplateSchema,
+        chunk_results: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        normalized_output = {
+            sheet.name: {column.name: "" for column in sheet.columns}
+            for sheet in template_schema.sheets
+        }
+        validation_warnings: list[str] = []
+        notes: list[str] = []
+        confidences: list[str] = []
+        raw_chunks: list[dict[str, Any]] = []
+
+        for index, result in enumerate(chunk_results):
+            chunk_number = index + 1
+            for sheet_name, row in result["normalized_output"].items():
+                normalized_output.setdefault(sheet_name, {}).update(row)
+
+            validation_warnings.extend(
+                f"Chunk {chunk_number}: {warning}"
+                for warning in result["validation_warnings"]
+            )
+            if result["notes"]:
+                notes.append(f"Chunk {chunk_number}: {result['notes']}")
+            if result["confidence"]:
+                confidences.append(str(result["confidence"]).lower())
+            raw_chunks.append({"chunk": chunk_number, "raw_text": result["raw_text"]})
+
+        return {
+            "raw_text": json.dumps({"chunks": raw_chunks}, indent=2, ensure_ascii=False),
+            "normalized_output": normalized_output,
+            "validation_warnings": validation_warnings,
+            "notes": "\n".join(notes) if notes else None,
+            "confidence": self._merge_confidences(confidences),
+        }
+
+    def _merge_confidences(self, confidences: list[str]) -> str | None:
+        if not confidences:
+            return None
+        for candidate in ("low", "medium", "high"):
+            if candidate in confidences:
+                return candidate
+        return confidences[0]
+
+    def _split_template_schema(
+        self,
+        template_schema: TemplateSchema,
+        schema_chunk_columns: int | None = None,
+    ) -> list[TemplateSchema]:
+        max_columns = max(1, schema_chunk_columns or self.settings.llm_schema_chunk_columns)
+        total_columns = sum(len(sheet.columns) for sheet in template_schema.sheets)
+        if total_columns <= max_columns:
+            return [template_schema]
+
+        chunks: list[TemplateSchema] = []
+        for sheet in template_schema.sheets:
+            if not sheet.columns:
+                chunks.append(
+                    TemplateSchema(
+                        workbook_filename=template_schema.workbook_filename,
+                        sheets=[sheet.model_copy(deep=True)],
+                    )
+                )
+                continue
+
+            for start in range(0, len(sheet.columns), max_columns):
+                chunk_columns = [
+                    column.model_copy(deep=True)
+                    for column in sheet.columns[start : start + max_columns]
+                ]
+                chunks.append(
+                    TemplateSchema(
+                        workbook_filename=template_schema.workbook_filename,
+                        sheets=[
+                            SheetSchema(
+                                name=sheet.name,
+                                header_row_index=sheet.header_row_index,
+                                data_start_row_index=sheet.data_start_row_index,
+                                columns=chunk_columns,
+                            )
+                        ],
+                    )
+                )
+
+        return chunks or [template_schema]
 
     async def list_models(self, provider: LLMProvider, api_key: str | None = None) -> list[str]:
         if provider == LLMProvider.OPENAI:

@@ -15,12 +15,13 @@ services:
       OPENAI_BASE_URL: https://api.openai.com/v1
       KI4BUW_BASE_URL: https://llm.ki4buw.de/v1
       KI4BUW_MODELS: openai/qwen3
-      KI4BUW_MAX_INPUT_TOKENS: 9000
-      KI4BUW_MAX_COMPLETION_TOKENS: 1024
+      KI4BUW_MAX_INPUT_TOKENS: 7500
+      KI4BUW_MAX_COMPLETION_TOKENS: 4096
+      LLM_SCHEMA_CHUNK_COLUMNS: 14
       ANTHROPIC_BASE_URL: https://api.anthropic.com/v1
       DEFAULT_TEMPERATURE: 0.1
     ports:
-      - "8000:8000"
+      - "8001:8001"
     volumes:
       - survey_paper_data:/app/data
     restart: unless-stopped

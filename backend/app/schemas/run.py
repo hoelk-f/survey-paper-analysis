@@ -26,6 +26,14 @@ class RunCreateRequest(BaseModel):
     template_schema: TemplateSchema | None = None
 
 
+class RunResumeRequest(BaseModel):
+    api_key: str | None = None
+
+
+class RunRetryFailedRequest(RunResumeRequest):
+    chunk_size: int | None = Field(default=None, ge=1, le=100)
+
+
 class PaperExtractionResult(BaseModel):
     paper_id: str
     paper_filename: str

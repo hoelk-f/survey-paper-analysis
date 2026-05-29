@@ -8,7 +8,7 @@ from app.core.config import get_settings
 from app.models.enums import LLMProvider, PaperResultStatus, RunStatus
 from app.schemas.project import PaperRecord, ProjectRecord, TemplateSchema
 from app.schemas.run import LLMSettings, PaperExtractionResult, RunCreateRequest, RunDetail, RunRecord, RunSummary
-from app.services.llm_service import LLMService, get_llm_service
+from app.services.llm_service import LLMResponseParseError, LLMService, get_llm_service
 from app.services.pdf_service import PdfService, get_pdf_service
 from app.services.template_service import TemplateService, get_template_service
 from app.storage.repository import Repository, get_repository
@@ -229,9 +229,118 @@ class RunService:
         )
 
         self.repository.save_run(run)
-        task = asyncio.create_task(self._execute_run(project, run.id, payload.api_key))
-        self.tasks[run.id] = task
-        task.add_done_callback(lambda _: self.tasks.pop(run.id, None))
+        self._start_run_task(project, run.id, payload.api_key)
+        return self.get_run_detail(project_id, run.id)
+
+    async def pause_run(self, project_id: str, run_id: str) -> RunDetail:
+        project = self.repository.get_project(project_id)
+        run = self.repository.get_run(project_id, run_id)
+        if run.status == RunStatus.PAUSED:
+            return self.get_run_detail(project_id, run_id)
+        if run.status not in {RunStatus.PENDING, RunStatus.RUNNING}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only pending or running versions can be paused.",
+            )
+
+        self._mark_run_paused(run)
+        self.repository.save_run(run)
+
+        task = self.tasks.get(run.id)
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        run = self.repository.get_run(project_id, run_id)
+        self._mark_run_paused(run)
+        self.repository.save_run(run)
+        project.updated_at = self.repository.now()
+        self.repository.save_project(project)
+        return self.get_run_detail(project_id, run_id)
+
+    def resume_run(self, project_id: str, run_id: str, api_key: str | None) -> RunDetail:
+        project = self.repository.get_project(project_id)
+        run = self.repository.get_run(project_id, run_id)
+        if run.status != RunStatus.PAUSED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Only paused versions can be resumed.",
+            )
+        if run.id in self.tasks:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This version is already running.",
+            )
+        if not run.llm_settings.mock_mode and not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An API key is required to resume this version.",
+            )
+
+        run.status = RunStatus.PENDING
+        run.error = None
+        for paper_result in run.paper_results:
+            if paper_result.status == PaperResultStatus.RUNNING:
+                paper_result.status = PaperResultStatus.PENDING
+                paper_result.started_at = None
+                paper_result.completed_at = None
+                paper_result.error = None
+        run.updated_at = self.repository.now()
+        self.repository.save_run(run)
+        self._start_run_task(project, run.id, api_key)
+        return self.get_run_detail(project_id, run.id)
+
+    def retry_failed_papers(
+        self,
+        project_id: str,
+        run_id: str,
+        api_key: str | None,
+        schema_chunk_columns: int | None = None,
+    ) -> RunDetail:
+        project = self.repository.get_project(project_id)
+        run = self.repository.get_run(project_id, run_id)
+        if run.id in self.tasks or run.status in {RunStatus.PENDING, RunStatus.RUNNING}:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This version is already running.",
+            )
+        if run.status == RunStatus.PAUSED:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Resume the paused version before retrying failed PDFs.",
+            )
+
+        failed_results = [result for result in run.paper_results if result.status == PaperResultStatus.FAILED]
+        if not failed_results:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This version has no failed PDFs to retry.",
+            )
+        if not run.llm_settings.mock_mode and not api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An API key is required to retry failed PDFs.",
+            )
+
+        run.status = RunStatus.PENDING
+        run.error = None
+        for paper_result in failed_results:
+            paper_result.status = PaperResultStatus.PENDING
+            paper_result.extracted_text_char_count = 0
+            paper_result.started_at = None
+            paper_result.completed_at = None
+            paper_result.notes = None
+            paper_result.confidence = None
+            paper_result.validation_warnings = []
+            paper_result.normalized_output = {}
+            paper_result.llm_raw_output = None
+            paper_result.error = None
+        run.updated_at = self.repository.now()
+        self.repository.save_run(run)
+        self._start_run_task(project, run.id, api_key, schema_chunk_columns=schema_chunk_columns)
         return self.get_run_detail(project_id, run.id)
 
     def recover_interrupted_runs(self) -> None:
@@ -240,29 +349,46 @@ class RunService:
             project_changed = False
             for run in runs:
                 if run.status in {RunStatus.PENDING, RunStatus.RUNNING}:
-                    run.status = RunStatus.FAILED
-                    run.error = "Run was interrupted before completion. Start a new version to continue."
-                    run.updated_at = self.repository.now()
+                    self._mark_run_paused(run)
                     self.repository.save_run(run)
                     project_changed = True
             if project_changed:
                 project.updated_at = self.repository.now()
                 self.repository.save_project(project)
 
-    async def _execute_run(self, project: ProjectRecord, run_id: str, api_key: str | None) -> None:
+    async def _execute_run(
+        self,
+        project: ProjectRecord,
+        run_id: str,
+        api_key: str | None,
+        schema_chunk_columns: int | None = None,
+    ) -> None:
         run = self.repository.get_run(project.id, run_id)
         try:
+            for paper_result in run.paper_results:
+                if paper_result.status == PaperResultStatus.RUNNING:
+                    paper_result.status = PaperResultStatus.PENDING
             run.updated_at = self.repository.now()
             run.status = RunStatus.RUNNING
+            run.error = None
             self.repository.save_run(run)
 
-            had_failures = False
-            completed_count = 0
+            had_failures = any(item.status == PaperResultStatus.FAILED for item in run.paper_results)
+            completed_count = sum(1 for item in run.paper_results if item.status == PaperResultStatus.COMPLETED)
+            contextual_analyst_instructions = self._compose_contextual_analyst_instructions(
+                project,
+                run.analyst_instructions,
+            )
 
             for index, paper in enumerate(run.papers_snapshot):
                 paper_result = run.paper_results[index]
+                if paper_result.status in {PaperResultStatus.COMPLETED, PaperResultStatus.FAILED}:
+                    continue
+
                 paper_result.status = PaperResultStatus.RUNNING
                 paper_result.started_at = self.repository.now()
+                paper_result.completed_at = None
+                paper_result.error = None
                 run.updated_at = self.repository.now()
                 self.repository.save_run(run)
 
@@ -282,7 +408,8 @@ class RunService:
                         paper=paper,
                         paper_text=paper_text,
                         system_prompt=run.system_prompt,
-                        analyst_instructions=run.analyst_instructions,
+                        analyst_instructions=contextual_analyst_instructions,
+                        schema_chunk_columns=schema_chunk_columns,
                     )
 
                     paper_result.extracted_text_char_count = len(paper_text)
@@ -295,6 +422,12 @@ class RunService:
                     paper_result.completed_at = self.repository.now()
                     paper_result.error = None
                     completed_count += 1
+                except LLMResponseParseError as exc:
+                    had_failures = True
+                    paper_result.status = PaperResultStatus.FAILED
+                    paper_result.error = str(exc)
+                    paper_result.llm_raw_output = exc.raw_text
+                    paper_result.completed_at = self.repository.now()
                 except Exception as exc:  # noqa: BLE001
                     had_failures = True
                     paper_result.status = PaperResultStatus.FAILED
@@ -317,6 +450,8 @@ class RunService:
             else:
                 run.status = RunStatus.COMPLETED
                 run.error = None
+        except asyncio.CancelledError:
+            self._mark_run_paused(run)
         except Exception as exc:  # noqa: BLE001
             run.status = RunStatus.FAILED
             run.error = str(exc)
@@ -326,6 +461,35 @@ class RunService:
 
         project.updated_at = self.repository.now()
         self.repository.save_project(project)
+
+    def _start_run_task(
+        self,
+        project: ProjectRecord,
+        run_id: str,
+        api_key: str | None,
+        schema_chunk_columns: int | None = None,
+    ) -> None:
+        task = asyncio.create_task(
+            self._execute_run(
+                project,
+                run_id,
+                api_key,
+                schema_chunk_columns=schema_chunk_columns,
+            )
+        )
+        self.tasks[run_id] = task
+        task.add_done_callback(lambda _: self.tasks.pop(run_id, None))
+
+    def _mark_run_paused(self, run: RunRecord) -> None:
+        run.status = RunStatus.PAUSED
+        run.error = None
+        for paper_result in run.paper_results:
+            if paper_result.status == PaperResultStatus.RUNNING:
+                paper_result.status = PaperResultStatus.PENDING
+                paper_result.started_at = None
+                paper_result.completed_at = None
+                paper_result.error = None
+        run.updated_at = self.repository.now()
 
     def _to_summary(self, project_id: str, run: RunRecord) -> RunSummary:
         completed_papers = sum(1 for item in run.paper_results if item.status == PaperResultStatus.COMPLETED)
@@ -349,6 +513,34 @@ class RunService:
             total_papers=len(run.paper_results),
             workbook_download_url=workbook_download_url,
         )
+
+    def _compose_contextual_analyst_instructions(
+        self,
+        project: ProjectRecord,
+        analyst_instructions: str,
+    ) -> str:
+        project_context: list[str] = []
+        if project.description.strip():
+            project_context.append(f"Description:\n{project.description.strip()}")
+
+        research_questions = [
+            question.strip()
+            for question in project.research_questions[:3]
+            if question.strip()
+        ]
+        if research_questions:
+            project_context.append(
+                "Research questions:\n"
+                + "\n".join(f"RQ{index + 1}: {question}" for index, question in enumerate(research_questions))
+            )
+
+        blocks: list[str] = []
+        if project_context:
+            blocks.append("Project context for extraction:\n" + "\n\n".join(project_context))
+        if analyst_instructions.strip():
+            blocks.append("Analyst instructions:\n" + analyst_instructions.strip())
+
+        return "\n\n".join(blocks)
 
     def _get_default_model_for_provider(self, provider: LLMProvider) -> str:
         if provider == LLMProvider.KI4BUW:

@@ -28,6 +28,8 @@ class ProjectService:
     async def create_project(
         self,
         name: str | None,
+        description: str | None,
+        research_questions: list[str] | None,
         template: UploadFile,
         papers: list[UploadFile],
     ) -> ProjectDetail:
@@ -56,6 +58,8 @@ class ProjectService:
         project = ProjectRecord(
             id=project_id,
             name=(name or Path(template.filename or "Survey Project").stem).strip() or "Survey Project",
+            description=(description or "").strip(),
+            research_questions=self._normalize_research_questions(research_questions),
             created_at=now,
             updated_at=now,
             template_filename=template.filename or "template.xlsx",
@@ -100,6 +104,19 @@ class ProjectService:
     def update_template_guidance(self, project_id: str, template_schema: TemplateSchema) -> ProjectDetail:
         project = self.repository.get_project(project_id)
         project.template_schema = self.template_service.apply_template_guidance(project.template_schema, template_schema)
+        project.updated_at = self.repository.now()
+        self.repository.save_project(project)
+        return self.get_project_detail(project_id)
+
+    def update_project_context(
+        self,
+        project_id: str,
+        description: str,
+        research_questions: list[str],
+    ) -> ProjectDetail:
+        project = self.repository.get_project(project_id)
+        project.description = description.strip()
+        project.research_questions = self._normalize_research_questions(research_questions)
         project.updated_at = self.repository.now()
         self.repository.save_project(project)
         return self.get_project_detail(project_id)
@@ -188,12 +205,18 @@ class ProjectService:
         return ProjectSummary(
             id=project.id,
             name=project.name,
+            description=project.description,
+            research_questions=project.research_questions,
             created_at=project.created_at,
             updated_at=project.updated_at,
             template_filename=project.template_filename,
             paper_count=len(project.papers),
             run_count=run_count if run_count is not None else len(self.repository.list_runs(project.id)),
         )
+
+    def _normalize_research_questions(self, research_questions: list[str] | None) -> list[str]:
+        normalized = [(question or "").strip() for question in (research_questions or [])[:3]]
+        return normalized + [""] * (3 - len(normalized))
 
 
 _project_service = ProjectService(get_repository(), get_template_service(), get_pdf_service())

@@ -1,5 +1,6 @@
 import { resolveApiUrl } from "../api/client";
 import type { RunSummary } from "../types";
+import { StatusBadge } from "./StatusBadge";
 
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString();
@@ -10,8 +11,10 @@ interface VersionListProps {
   hasProject?: boolean;
   selectedRunId: string | null;
   deletingRunId?: string | null;
+  resumingRunId?: string | null;
   onSelect: (runId: string) => void;
   onDelete: (run: RunSummary) => void;
+  onResume: (run: RunSummary) => void;
 }
 
 export function VersionList({
@@ -19,8 +22,10 @@ export function VersionList({
   hasProject = true,
   selectedRunId,
   deletingRunId = null,
+  resumingRunId = null,
   onSelect,
   onDelete,
+  onResume,
 }: VersionListProps) {
   return (
     <div className="min-w-[480px] flex-1">
@@ -43,6 +48,7 @@ export function VersionList({
                 <div className="flex h-full items-center gap-4">
                   <div className="shrink-0 font-display text-sm font-semibold text-white">v{run.version_number}</div>
                   <div className="min-w-0 flex-1 truncate text-sm text-slate-300">{run.label}</div>
+                  <StatusBadge status={run.status} />
                   <div className="shrink-0 text-xs text-slate-400">{formatDate(run.created_at)}</div>
                 </div>
               </button>
@@ -55,6 +61,19 @@ export function VersionList({
                   >
                     Export
                   </a>
+                ) : null}
+                {run.status === "paused" ? (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onResume(run);
+                    }}
+                    disabled={resumingRunId === run.id}
+                    className="rounded-full border border-sky-400/25 bg-sky-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-sky-200 transition hover:border-sky-300/45 hover:bg-sky-400/20 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {resumingRunId === run.id ? "..." : "Resume"}
+                  </button>
                 ) : null}
                 <button
                   type="button"

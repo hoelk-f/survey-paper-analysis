@@ -1,10 +1,30 @@
+import json
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from pydantic import ValidationError
 
-from app.schemas.project import ProjectDetail, ProjectSummary, TemplateSchema
+from app.schemas.project import ProjectContextUpdate, ProjectDetail, ProjectSummary, TemplateSchema
 from app.services.project_service import ProjectService, get_project_service
 
 router = APIRouter()
+
+
+def parse_research_questions(raw_questions: str | None) -> list[str]:
+    if not raw_questions:
+        return []
+    try:
+        questions = json.loads(raw_questions)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid research questions payload.",
+        ) from exc
+    if not isinstance(questions, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Research questions must be a list.",
+        )
+    return [str(question) if question is not None else "" for question in questions[:3]]
 
 
 @router.get("", response_model=list[ProjectSummary])
@@ -15,6 +35,8 @@ def list_projects(project_service: ProjectService = Depends(get_project_service)
 @router.post("", response_model=ProjectDetail, status_code=status.HTTP_201_CREATED)
 async def create_project(
     name: str | None = Form(default=None),
+    description: str | None = Form(default=None),
+    research_questions: str | None = Form(default=None),
     template: UploadFile = File(...),
     papers: list[UploadFile] = File(...),
     template_guidance: str | None = Form(default=None),
@@ -26,7 +48,13 @@ async def create_project(
         parsed_guidance = TemplateSchema.model_validate_json(template_guidance) if template_guidance else None
     except ValidationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid template guidance payload: {exc}") from exc
-    project = await project_service.create_project(name=name, template=template, papers=papers)
+    project = await project_service.create_project(
+        name=name,
+        description=description,
+        research_questions=parse_research_questions(research_questions),
+        template=template,
+        papers=papers,
+    )
     if parsed_guidance:
         return project_service.update_template_guidance(project.id, parsed_guidance)
     return project
@@ -63,6 +91,19 @@ def update_template_guidance(
     project_service: ProjectService = Depends(get_project_service),
 ) -> ProjectDetail:
     return project_service.update_template_guidance(project_id=project_id, template_schema=template_schema)
+
+
+@router.put("/{project_id}/context", response_model=ProjectDetail)
+def update_project_context(
+    project_id: str,
+    context: ProjectContextUpdate,
+    project_service: ProjectService = Depends(get_project_service),
+) -> ProjectDetail:
+    return project_service.update_project_context(
+        project_id=project_id,
+        description=context.description,
+        research_questions=context.research_questions,
+    )
 
 
 @router.post("/{project_id}/papers", response_model=ProjectDetail)

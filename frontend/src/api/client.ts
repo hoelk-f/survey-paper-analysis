@@ -61,6 +61,8 @@ export const api = {
 
   async createProject(input: {
     name?: string;
+    description?: string;
+    researchQuestions?: string[];
     template: File;
     papers: File[];
     templateSchema?: TemplateSchema | null;
@@ -68,6 +70,12 @@ export const api = {
     const formData = new FormData();
     if (input.name) {
       formData.append("name", input.name);
+    }
+    if (input.description) {
+      formData.append("description", input.description);
+    }
+    if (input.researchQuestions) {
+      formData.append("research_questions", JSON.stringify(input.researchQuestions));
     }
     formData.append("template", input.template);
     input.papers.forEach((paper) => formData.append("papers", paper));
@@ -123,6 +131,25 @@ export const api = {
     });
   },
 
+  updateProjectContext(
+    projectId: string,
+    input: {
+      description: string;
+      researchQuestions: string[];
+    },
+  ): Promise<ProjectDetail> {
+    return request<ProjectDetail>(`/projects/${projectId}/context`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        description: input.description,
+        research_questions: input.researchQuestions,
+      }),
+    });
+  },
+
   listRuns(projectId: string): Promise<RunSummary[]> {
     return request<RunSummary[]>(`/projects/${projectId}/runs`);
   },
@@ -149,6 +176,45 @@ export const api = {
 
   getRun(projectId: string, runId: string): Promise<RunDetail> {
     return request<RunDetail>(`/projects/${projectId}/runs/${runId}`);
+  },
+
+  pauseRun(projectId: string, runId: string): Promise<RunDetail> {
+    return request<RunDetail>(`/projects/${projectId}/runs/${runId}/pause`, {
+      method: "POST",
+    });
+  },
+
+  resumeRun(
+    projectId: string,
+    runId: string,
+    input: {
+      apiKey?: string;
+    },
+  ): Promise<RunDetail> {
+    return request<RunDetail>(`/projects/${projectId}/runs/${runId}/resume`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ api_key: input.apiKey }),
+    });
+  },
+
+  retryFailedPapers(
+    projectId: string,
+    runId: string,
+    input: {
+      apiKey?: string;
+      chunkSize?: number;
+    },
+  ): Promise<RunDetail> {
+    return request<RunDetail>(`/projects/${projectId}/runs/${runId}/retry-failed`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ api_key: input.apiKey, chunk_size: input.chunkSize }),
+    });
   },
 
   deleteRun(projectId: string, runId: string): Promise<void> {

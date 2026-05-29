@@ -22,8 +22,9 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     ki4buw_base_url: str = "https://llm.ki4buw.de/v1"
     ki4buw_models: str = "openai/qwen3"
-    ki4buw_max_input_tokens: int = 9000
-    ki4buw_max_completion_tokens: int = 1024
+    ki4buw_max_input_tokens: int = 7500
+    ki4buw_max_completion_tokens: int = 4096
+    llm_schema_chunk_columns: int = 14
     anthropic_base_url: str = "https://api.anthropic.com/v1"
     default_temperature: float = 0.1
     elsevier_sciencedirect_search_url: str = "https://api.elsevier.com/content/search/sciencedirect"
